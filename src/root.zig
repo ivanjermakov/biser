@@ -37,19 +37,29 @@ fn serializeWriter(comptime T: anytype, value: T, writer: *std.Io.Writer) !void 
 
 pub fn deserialize(comptime T: anytype, buf: []const u8) !T {
     var value: T = undefined;
+    var offset: usize = 0;
     switch (@typeInfo(T)) {
         .int, .float, .bool => {
             @memcpy(std.mem.asBytes(&value), buf[0..@sizeOf(T)]);
         },
         .@"struct" => |info| {
-            var offset: usize = 0;
             inline for (info.fields) |field_info| {
                 const field = try deserialize(field_info.type, buf[offset..]);
                 @field(value, field_info.name) = field;
                 offset += @sizeOf(field_info.type);
             }
         },
-        else => @panic(std.fmt.comptimePrint("cannot serialize {}", .{T})),
+        .pointer => |info| {
+            switch (info.size) {
+                .slice => {
+                    value.len = try deserialize(u32, buf[0..]);
+                    offset += @sizeOf(u32);
+                    value.ptr = @constCast(buf[offset..].ptr);
+                },
+                else => @panic(std.fmt.comptimePrint("cannot deserialize {}", .{info})),
+            }
+        },
+        else => @panic(std.fmt.comptimePrint("cannot deserialize {}", .{T})),
     }
     return value;
 }
@@ -90,5 +100,17 @@ test "deserialize" {
         const buf = d[2];
         const actual = try deserialize(t, buf);
         try std.testing.expectEqual(expected, actual);
+    }
+}
+
+test "deserialize with slices" {
+    inline for (.{
+        .{ []u8, @constCast(&[_]u8{ 0, 1, 2 }), &.{ 3, 0, 0, 0, 0, 1, 2 } },
+    }) |d| {
+        const t = d[0];
+        const expected = d[1];
+        const buf = d[2];
+        const actual = try deserialize(t, buf);
+        try std.testing.expectEqualSlices(u8, expected, actual);
     }
 }
