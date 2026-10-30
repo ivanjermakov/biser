@@ -36,14 +36,22 @@ fn serializeWriter(comptime T: anytype, value: T, writer: *std.Io.Writer) !void 
 }
 
 pub fn deserialize(comptime T: anytype, buf: []const u8) !T {
+    var value: T = undefined;
     switch (@typeInfo(T)) {
         .int, .float, .bool => {
-            var value: T = undefined;
-            @memcpy(std.mem.asBytes(&value), buf[0..]);
-            return value;
+            @memcpy(std.mem.asBytes(&value), buf[0..@sizeOf(T)]);
+        },
+        .@"struct" => |info| {
+            var offset: usize = 0;
+            inline for (info.fields) |field_info| {
+                const field = try deserialize(field_info.type, buf[offset..]);
+                @field(value, field_info.name) = field;
+                offset += @sizeOf(field_info.type);
+            }
         },
         else => @panic(std.fmt.comptimePrint("cannot serialize {}", .{T})),
     }
+    return value;
 }
 
 test "serialize" {
@@ -68,10 +76,14 @@ test "serialize" {
 }
 
 test "deserialize" {
+    const A = struct { a: u8 };
+    const B = struct { a: u8, b: u32, c: A };
     inline for (.{
         .{ u8, 4, &.{4} },
         .{ u32, 4, &.{ 4, 0, 0, 0 } },
         .{ f16, 12.34, &.{ 0x2C, 0x4A } },
+        .{ A, A{ .a = 4 }, &.{4} },
+        .{ B, B{ .a = 5, .b = 1, .c = A{ .a = 4 } }, &.{ 5, 1, 0, 0, 0, 4 } },
     }) |d| {
         const t = d[0];
         const expected = d[1];
