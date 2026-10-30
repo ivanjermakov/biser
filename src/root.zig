@@ -31,6 +31,11 @@ fn serializeWriter(comptime T: anytype, value: T, writer: *std.Io.Writer) !void 
                 else => @panic(std.fmt.comptimePrint("cannot serialize {}", .{info})),
             }
         },
+        .array => |info| {
+            for (value) |item| {
+                try serializeWriter(info.child, item, writer);
+            }
+        },
         else => @panic(std.fmt.comptimePrint("cannot serialize {}", .{T})),
     }
 }
@@ -67,6 +72,11 @@ pub fn deserialize(comptime T: anytype, buf: []const u8, opts: DeserializeOption
                 else => @panic(std.fmt.comptimePrint("cannot deserialize {}", .{info})),
             }
         },
+        .array => |info| {
+            if (buf.len < offset + value.len * @sizeOf(info.child)) return error.Eof;
+            @memcpy(std.mem.asBytes(value[0..]), buf[offset..]);
+            if (opts.offset) |off| off.* += value.len * @sizeOf(info.child);
+        },
         else => @panic(std.fmt.comptimePrint("cannot deserialize {}", .{T})),
     }
     return value;
@@ -85,6 +95,7 @@ test "serialize" {
         .{ B, B{ .a = 5, .b = 1, .c = A{ .a = 4 } }, &.{ 5, 1, 0, 0, 0, 4 } },
         .{ []u8, @constCast(&[_]u8{ 1, 2, 3 }), &.{ 3, 0, 0, 0, 1, 2, 3 } },
         .{ C, C{ .a = @constCast(&[_]A{ .{ .a = 1 }, .{ .a = 2 }, .{ .a = 3 } }) }, &.{ 3, 0, 0, 0, 1, 2, 3 } },
+        .{ [2]f32, .{ 1, 2 }, &.{ 0, 0, 0x80, 0x3F, 0, 0, 0, 0x40 } },
     }) |d| {
         const t = d[0];
         const value = d[1];
@@ -107,6 +118,7 @@ test "deserialize" {
         .{ B, B{ .a = 5, .b = 1, .c = A{ .a = 4 } }, &.{ 5, 1, 0, 0, 0, 4 } },
         .{ []u8, @constCast(&[_]u8{ 1, 2, 3 }), &.{ 3, 0, 0, 0, 1, 2, 3 } },
         .{ C, C{ .a = @constCast(&[_]A{ .{ .a = 1 }, .{ .a = 2 }, .{ .a = 3 } }) }, &.{ 3, 0, 0, 0, 1, 2, 3 } },
+        .{ [2]f32, .{ 1, 2 }, &.{ 0, 0, 0x80, 0x3F, 0, 0, 0, 0x40 } },
     }) |d| {
         const t = d[0];
         const expected = d[1];
