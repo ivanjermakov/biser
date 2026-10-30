@@ -1,0 +1,12 @@
+.{
+    .name = .biser,
+    .version = "0.0.0",
+    .fingerprint = 0x93c83242f4cf90f5,
+    .minimum_zig_version = "0.16.0",
+    .dependencies = .{},
+    .paths = .{
+        "build.zig",
+        "build.zig.zon",
+        "src",
+    },
+}
