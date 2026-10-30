@@ -40,6 +40,7 @@ pub fn deserialize(comptime T: anytype, buf: []const u8) !T {
     var offset: usize = 0;
     switch (@typeInfo(T)) {
         .int, .float, .bool => {
+            if (buf.len < @sizeOf(T)) return error.Eof;
             @memcpy(std.mem.asBytes(&value), buf[0..@sizeOf(T)]);
         },
         .@"struct" => |info| {
@@ -52,8 +53,10 @@ pub fn deserialize(comptime T: anytype, buf: []const u8) !T {
         .pointer => |info| {
             switch (info.size) {
                 .slice => {
+                    if (buf.len < @sizeOf(u32)) return error.Eof;
                     value.len = try deserialize(u32, buf[0..]);
                     offset += @sizeOf(u32);
+                    if (buf.len < offset + value.len * @sizeOf(info.child)) return error.Eof;
                     value.ptr = @as([*]info.child, @ptrCast(@constCast(buf[offset..].ptr)));
                 },
                 else => @panic(std.fmt.comptimePrint("cannot deserialize {}", .{info})),
@@ -106,4 +109,10 @@ test "deserialize" {
         const actual = try deserialize(t, buf);
         try std.testing.expectEqualDeep(expected, actual);
     }
+}
+
+test "deserialize no segfault" {
+    try std.testing.expectError(error.Eof, deserialize(u8, &.{}));
+    try std.testing.expectError(error.Eof, deserialize(struct { a: u8 }, &.{}));
+    try std.testing.expectError(error.Eof, deserialize([]u8, &.{ 1, 0, 0, 0 }));
 }
