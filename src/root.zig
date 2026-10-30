@@ -10,14 +10,25 @@ pub fn serializeAlloc(comptime T: anytype, alloc: std.mem.Allocator, value: T) !
 }
 
 fn serializeWriter(comptime T: anytype, value: T, writer: *std.Io.Writer) !void {
-    const info = @typeInfo(T);
-    switch (info) {
+    switch (@typeInfo(T)) {
         .int, .float, .bool => {
             try writer.writeAll(std.mem.asBytes(&value));
         },
-        .@"struct" => |inf| {
-            inline for (inf.fields) |field| {
+        .@"struct" => |info| {
+            inline for (info.fields) |field| {
                 try serializeWriter(field.type, @field(value, field.name), writer);
+            }
+        },
+        .pointer => |info| {
+            switch (info.size) {
+                .slice => {
+                    const len = std.math.cast(u32, value.len) orelse @panic("slice too long");
+                    try serializeWriter(u32, len, writer);
+                    for (value) |item| {
+                        try serializeWriter(info.child, item, writer);
+                    }
+                },
+                else => @panic(std.fmt.comptimePrint("cannot serialize {}", .{info})),
             }
         },
         else => @panic(std.fmt.comptimePrint("cannot serialize {}", .{T})),
@@ -34,6 +45,7 @@ test "serialize" {
         .{ f16, 12.34, &.{ 0x2C, 0x4A } },
         .{ A, A{ .a = 4 }, &.{4} },
         .{ B, B{ .a = 5, .b = 1, .c = A{ .a = 4 } }, &.{ 5, 1, 0, 0, 0, 4 } },
+        .{ []u8, @constCast(&[_]u8{ 0, 1, 2 }), &.{ 3, 0, 0, 0, 0, 1, 2 } },
     }) |d| {
         const t = d[0];
         const value = d[1];
