@@ -54,7 +54,7 @@ pub fn deserialize(comptime T: anytype, buf: []const u8) !T {
                 .slice => {
                     value.len = try deserialize(u32, buf[0..]);
                     offset += @sizeOf(u32);
-                    value.ptr = @constCast(buf[offset..].ptr);
+                    value.ptr = @as([*]info.child, @ptrCast(@constCast(buf[offset..].ptr)));
                 },
                 else => @panic(std.fmt.comptimePrint("cannot deserialize {}", .{info})),
             }
@@ -68,13 +68,15 @@ test "serialize" {
     const alloc = std.testing.allocator;
     const A = struct { a: u8 };
     const B = struct { a: u8, b: u32, c: A };
+    const C = struct { a: []A };
     inline for (.{
         .{ u8, 4, &.{4} },
         .{ u32, 4, &.{ 4, 0, 0, 0 } },
         .{ f16, 12.34, &.{ 0x2C, 0x4A } },
         .{ A, A{ .a = 4 }, &.{4} },
         .{ B, B{ .a = 5, .b = 1, .c = A{ .a = 4 } }, &.{ 5, 1, 0, 0, 0, 4 } },
-        .{ []u8, @constCast(&[_]u8{ 0, 1, 2 }), &.{ 3, 0, 0, 0, 0, 1, 2 } },
+        .{ []u8, @constCast(&[_]u8{ 1, 2, 3 }), &.{ 3, 0, 0, 0, 1, 2, 3 } },
+        .{ C, C{ .a = @constCast(&[_]A{ .{ .a = 1 }, .{ .a = 2 }, .{ .a = 3 } }) }, &.{ 3, 0, 0, 0, 1, 2, 3 } },
     }) |d| {
         const t = d[0];
         const value = d[1];
@@ -88,29 +90,20 @@ test "serialize" {
 test "deserialize" {
     const A = struct { a: u8 };
     const B = struct { a: u8, b: u32, c: A };
+    const C = struct { a: []A };
     inline for (.{
         .{ u8, 4, &.{4} },
         .{ u32, 4, &.{ 4, 0, 0, 0 } },
         .{ f16, 12.34, &.{ 0x2C, 0x4A } },
         .{ A, A{ .a = 4 }, &.{4} },
         .{ B, B{ .a = 5, .b = 1, .c = A{ .a = 4 } }, &.{ 5, 1, 0, 0, 0, 4 } },
+        .{ []u8, @constCast(&[_]u8{ 1, 2, 3 }), &.{ 3, 0, 0, 0, 1, 2, 3 } },
+        .{ C, C{ .a = @constCast(&[_]A{ .{ .a = 1 }, .{ .a = 2 }, .{ .a = 3 } }) }, &.{ 3, 0, 0, 0, 1, 2, 3 } },
     }) |d| {
         const t = d[0];
         const expected = d[1];
         const buf = d[2];
         const actual = try deserialize(t, buf);
-        try std.testing.expectEqual(expected, actual);
-    }
-}
-
-test "deserialize with slices" {
-    inline for (.{
-        .{ []u8, @constCast(&[_]u8{ 0, 1, 2 }), &.{ 3, 0, 0, 0, 0, 1, 2 } },
-    }) |d| {
-        const t = d[0];
-        const expected = d[1];
-        const buf = d[2];
-        const actual = try deserialize(t, buf);
-        try std.testing.expectEqualSlices(u8, expected, actual);
+        try std.testing.expectEqualDeep(expected, actual);
     }
 }
