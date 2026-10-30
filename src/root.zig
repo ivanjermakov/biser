@@ -35,17 +35,21 @@ fn serializeWriter(comptime T: anytype, value: T, writer: *std.Io.Writer) !void 
     }
 }
 
-pub fn deserialize(comptime T: anytype, buf: []const u8) !T {
+pub const DeserializeOptions = struct {
+    offset: ?*usize = null,
+};
+pub fn deserialize(comptime T: anytype, buf: []const u8, opts: DeserializeOptions) !T {
     var value: T = undefined;
     var offset: usize = 0;
     switch (@typeInfo(T)) {
         .int, .float, .bool => {
             if (buf.len < @sizeOf(T)) return error.Eof;
             @memcpy(std.mem.asBytes(&value), buf[0..@sizeOf(T)]);
+            if (opts.offset) |off| off.* += @sizeOf(T);
         },
         .@"struct" => |info| {
             inline for (info.fields) |field_info| {
-                const field = try deserialize(field_info.type, buf[offset..]);
+                const field = try deserialize(field_info.type, buf[offset..], opts);
                 @field(value, field_info.name) = field;
                 offset += @sizeOf(field_info.type);
             }
@@ -54,10 +58,11 @@ pub fn deserialize(comptime T: anytype, buf: []const u8) !T {
             switch (info.size) {
                 .slice => {
                     if (buf.len < @sizeOf(u32)) return error.Eof;
-                    value.len = try deserialize(u32, buf[0..]);
+                    value.len = try deserialize(u32, buf[0..], opts);
                     offset += @sizeOf(u32);
                     if (buf.len < offset + value.len * @sizeOf(info.child)) return error.Eof;
                     value.ptr = @as([*]info.child, @ptrCast(@constCast(buf[offset..].ptr)));
+                    if (opts.offset) |off| off.* += value.len * @sizeOf(info.child);
                 },
                 else => @panic(std.fmt.comptimePrint("cannot deserialize {}", .{info})),
             }
@@ -106,13 +111,15 @@ test "deserialize" {
         const t = d[0];
         const expected = d[1];
         const buf = d[2];
-        const actual = try deserialize(t, buf);
+        var offset: usize = 0;
+        const actual = try deserialize(t, buf, .{ .offset = &offset });
         try std.testing.expectEqualDeep(expected, actual);
+        try std.testing.expectEqual(buf.len, offset);
     }
 }
 
 test "deserialize no segfault" {
-    try std.testing.expectError(error.Eof, deserialize(u8, &.{}));
-    try std.testing.expectError(error.Eof, deserialize(struct { a: u8 }, &.{}));
-    try std.testing.expectError(error.Eof, deserialize([]u8, &.{ 1, 0, 0, 0 }));
+    try std.testing.expectError(error.Eof, deserialize(u8, &.{}, .{}));
+    try std.testing.expectError(error.Eof, deserialize(struct { a: u8 }, &.{}, .{}));
+    try std.testing.expectError(error.Eof, deserialize([]u8, &.{ 1, 0, 0, 0 }, .{}));
 }
