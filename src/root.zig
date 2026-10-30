@@ -35,6 +35,17 @@ fn serializeWriter(comptime T: anytype, value: T, writer: *std.Io.Writer) !void 
     }
 }
 
+pub fn deserialize(comptime T: anytype, buf: []const u8) !T {
+    switch (@typeInfo(T)) {
+        .int, .float, .bool => {
+            var value: T = undefined;
+            @memcpy(std.mem.asBytes(&value), buf[0..]);
+            return value;
+        },
+        else => @panic(std.fmt.comptimePrint("cannot serialize {}", .{T})),
+    }
+}
+
 test "serialize" {
     const alloc = std.testing.allocator;
     const A = struct { a: u8 };
@@ -53,5 +64,19 @@ test "serialize" {
         const buf = try serializeAlloc(t, alloc, value);
         defer alloc.free(buf);
         try std.testing.expectEqualSlices(u8, expected, buf);
+    }
+}
+
+test "deserialize" {
+    inline for (.{
+        .{ u8, 4, &.{4} },
+        .{ u32, 4, &.{ 4, 0, 0, 0 } },
+        .{ f16, 12.34, &.{ 0x2C, 0x4A } },
+    }) |d| {
+        const t = d[0];
+        const expected = d[1];
+        const buf = d[2];
+        const actual = try deserialize(t, buf);
+        try std.testing.expectEqual(expected, actual);
     }
 }
