@@ -1,6 +1,13 @@
 const std = @import("std");
 const Io = std.Io;
 
+pub fn Ignore(comptime T: anytype) type {
+    return struct {
+        v: T,
+        pub const biser_ignore = true;
+    };
+}
+
 pub fn serializeAlloc(comptime T: anytype, alloc: std.mem.Allocator, value: T) ![]u8 {
     var alloc_writer = std.Io.Writer.Allocating.init(alloc);
     defer alloc_writer.deinit();
@@ -10,6 +17,10 @@ pub fn serializeAlloc(comptime T: anytype, alloc: std.mem.Allocator, value: T) !
 }
 
 fn serializeWriter(comptime T: anytype, value: T, writer: *std.Io.Writer) !void {
+    switch (@typeInfo(T)) {
+        .@"struct" => if (@hasDecl(T, "biser_ignore")) return,
+        else => {},
+    }
     switch (@typeInfo(T)) {
         .int, .float, .bool => {
             try writer.writeAll(std.mem.asBytes(&value));
@@ -55,6 +66,10 @@ pub fn deserialize(comptime T: anytype, buf: []const u8, opts: DeserializeOption
         },
         .@"struct" => |info| {
             inline for (info.fields) |field_info| {
+                switch (@typeInfo(field_info.type)) {
+                    .@"struct" => if (@hasDecl(T, "biser_ignore")) continue,
+                    else => {},
+                }
                 const field = try deserialize(field_info.type, buf[offset..], opts);
                 @field(value, field_info.name) = field;
                 offset += @sizeOf(field_info.type);
@@ -68,7 +83,7 @@ pub fn deserialize(comptime T: anytype, buf: []const u8, opts: DeserializeOption
                     value.len = try deserialize(u32, buf[0..], opts);
                     offset += @sizeOf(u32);
                     if (buf.len < offset + value.len * @sizeOf(info.child)) return error.Eof;
-                    value.ptr = @as([*]info.child, @alignCast(@ptrCast(@constCast(buf[offset..].ptr))));
+                    value.ptr = @as([*]info.child, @ptrCast(@alignCast(@constCast(buf[offset..].ptr))));
                     if (opts.offset) |off| off.* += value.len * @sizeOf(info.child);
                 },
                 else => @panic(std.fmt.comptimePrint("cannot deserialize {}", .{info})),
@@ -111,6 +126,7 @@ test "serialize" {
     const A = struct { a: u8 };
     const B = struct { a: u8, b: u32, c: A };
     const C = struct { a: []A };
+    const D = struct { a: A, b: Ignore(B) };
     inline for (.{
         .{ u8, 4, &.{4} },
         .{ u32, 4, &.{ 4, 0, 0, 0 } },
@@ -120,6 +136,7 @@ test "serialize" {
         .{ []u8, @constCast(&[_]u8{ 1, 2, 3 }), &.{ 3, 0, 0, 0, 1, 2, 3 } },
         .{ C, C{ .a = @constCast(&[_]A{ .{ .a = 1 }, .{ .a = 2 }, .{ .a = 3 } }) }, &.{ 3, 0, 0, 0, 1, 2, 3 } },
         .{ [2]f32, .{ 1, 2 }, &.{ 0, 0, 0x80, 0x3F, 0, 0, 0, 0x40 } },
+        .{ D, D{ .a = A{ .a = 1 }, .b = .{ .v = B{ .a = 5, .b = 1, .c = A{ .a = 4 } } } }, &.{1} },
     }) |d| {
         const t = d[0];
         const value = d[1];
@@ -152,6 +169,19 @@ test "deserialize" {
         try std.testing.expectEqualDeep(expected, actual);
         try std.testing.expectEqual(buf.len, offset);
     }
+}
+
+test "deserialize with Ignore" {
+    const A = struct { a: u8 };
+    const B = struct { a: u8, b: u32, c: A };
+    const D = struct { a: A, b: Ignore(B) };
+
+    const expected = D{ .a = A{ .a = 1 }, .b = .{ .v = B{ .a = 5, .b = 1, .c = A{ .a = 4 } } } };
+    const buf = &.{1};
+    var offset: usize = 0;
+    const actual = try deserialize(D, buf, .{ .offset = &offset });
+    try std.testing.expectEqualDeep(expected.a, actual.a);
+    try std.testing.expectEqual(buf.len, offset);
 }
 
 test "deserialize no segfault" {
