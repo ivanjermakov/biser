@@ -52,17 +52,20 @@ fn serializeWriter(comptime T: anytype, value: T, writer: *std.Io.Writer) !void 
     }
 }
 
-pub const DeserializeOptions = struct {
-    offset: ?*usize = null,
-};
-pub fn deserialize(comptime T: anytype, buf: []const u8, opts: DeserializeOptions) !T {
+pub fn deserialize(comptime T: anytype, buf: []const u8) !T {
+    var offset: usize = 0;
+    return try deserializeOffset(T, buf, &offset);
+}
+
+pub fn deserializeOffset(comptime T: anytype, buf: []const u8, offset_global: *usize) !T {
     var value: T = undefined;
     var offset: usize = 0;
     switch (@typeInfo(T)) {
         .int, .float, .bool => {
-            if (buf.len < @sizeOf(T)) return error.Eof;
+            const item_size = @sizeOf(T);
+            if (buf.len < item_size) return error.Eof;
             @memcpy(std.mem.asBytes(&value), buf[0..@sizeOf(T)]);
-            if (opts.offset) |off| off.* += @sizeOf(T);
+            offset += item_size;
         },
         .@"struct" => |info| {
             inline for (info.fields) |field_info| {
@@ -71,33 +74,34 @@ pub fn deserialize(comptime T: anytype, buf: []const u8, opts: DeserializeOption
                     .@"struct" => if (@hasDecl(F, "biser_ignore")) continue,
                     else => {},
                 }
-                const field = try deserialize(F, buf[offset..], opts);
+                const field = try deserializeOffset(F, buf[offset..], &offset);
                 @field(value, field_info.name) = field;
-                offset += @sizeOf(F);
             }
         },
         .pointer => |info| {
             try assertSize(info.child);
+            const item_size = @sizeOf(info.child);
             switch (info.size) {
                 .slice => {
-                    if (buf.len < @sizeOf(u32)) return error.Eof;
-                    value.len = try deserialize(u32, buf[0..], opts);
-                    offset += @sizeOf(u32);
-                    if (buf.len < offset + value.len * @sizeOf(info.child)) return error.Eof;
-                    value.ptr = @as([*]info.child, @ptrCast(@alignCast(@constCast(buf[offset..].ptr))));
-                    if (opts.offset) |off| off.* += value.len * @sizeOf(info.child);
+                    const len_offset = @sizeOf(u32);
+                    if (buf.len < len_offset) return error.Eof;
+                    value.len = try deserializeOffset(u32, buf[offset..], &offset);
+                    if (buf.len < offset + value.len * item_size) return error.Eof;
+                    value.ptr = @as([*]info.child, @ptrCast(@alignCast(@constCast(buf[len_offset..].ptr))));
+                    offset += value.len * item_size;
                 },
                 else => @panic(std.fmt.comptimePrint("cannot deserialize {}", .{info})),
             }
         },
         .array => |info| {
             try assertSize(info.child);
-            if (buf.len < offset + value.len * @sizeOf(info.child)) return error.Eof;
-            @memcpy(std.mem.asBytes(value[0..]), buf[offset..]);
-            if (opts.offset) |off| off.* += value.len * @sizeOf(info.child);
+            if (buf.len < value.len * @sizeOf(info.child)) return error.Eof;
+            @memcpy(std.mem.asBytes(value[0..]), buf[0..]);
+            offset += value.len * @sizeOf(info.child);
         },
         else => @panic(std.fmt.comptimePrint("cannot deserialize {}", .{T})),
     }
+    offset_global.* += offset;
     return value;
 }
 
@@ -106,9 +110,17 @@ fn assertSize(comptime T: anytype) !void {
     switch (@typeInfo(T)) {
         .int, .float, .bool => {},
         .@"struct" => |info| {
+            var total: usize = 0;
             inline for (info.fields) |field| {
-                try assertSize(field.type);
+                const F = field.type;
+                switch (@typeInfo(F)) {
+                    .@"struct" => if (@hasDecl(F, "biser_ignore")) continue,
+                    else => {},
+                }
+                try assertSize(F);
+                total += @sizeOf(F);
             }
+            if (@sizeOf(T) != total) return error.SizeMismatch;
         },
         .pointer => |info| {
             if (expected != @sizeOf(info.child)) {
@@ -166,7 +178,7 @@ test "deserialize" {
         const expected = d[1];
         const buf = d[2];
         var offset: usize = 0;
-        const actual = try deserialize(t, buf, .{ .offset = &offset });
+        const actual = try deserializeOffset(t, buf, &offset);
         try std.testing.expectEqualDeep(expected, actual);
         try std.testing.expectEqual(buf.len, offset);
     }
@@ -180,7 +192,7 @@ test "deserialize with Ignore" {
     const expected = D{ .a = A{ .a = 1 }, .b = .{ .v = B{ .a = 5, .b = 1, .c = A{ .a = 4 } } } };
     const buf = &.{1};
     var offset: usize = 0;
-    const actual = try deserialize(D, buf, .{ .offset = &offset });
+    const actual = try deserializeOffset(D, buf, &offset);
     try std.testing.expectEqualDeep(expected.a, actual.a);
     try std.testing.expectEqual(buf.len, offset);
 }
@@ -191,13 +203,13 @@ test "deserialize with Ignore unsupported" {
     const expected = E{ .a = .{ .v = {} } };
     const buf = &.{};
     var offset: usize = 0;
-    const actual = try deserialize(E, buf, .{ .offset = &offset });
+    const actual = try deserializeOffset(E, buf, &offset);
     try std.testing.expectEqualDeep(expected.a, actual.a);
     try std.testing.expectEqual(buf.len, offset);
 }
 
 test "deserialize no segfault" {
-    try std.testing.expectError(error.Eof, deserialize(u8, &.{}, .{}));
-    try std.testing.expectError(error.Eof, deserialize(struct { a: u8 }, &.{}, .{}));
-    try std.testing.expectError(error.Eof, deserialize([]u8, &.{ 1, 0, 0, 0 }, .{}));
+    try std.testing.expectError(error.Eof, deserialize(u8, &.{}));
+    try std.testing.expectError(error.Eof, deserialize(struct { a: u8 }, &.{}));
+    try std.testing.expectError(error.Eof, deserialize([]u8, &.{ 1, 0, 0, 0 }));
 }
