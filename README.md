@@ -1,3 +1,3 @@
 # biser
 
-Straightforward binray serialization library in Zig
+Straightforward binary serialization library in Zig

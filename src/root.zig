@@ -20,6 +20,7 @@ fn serializeWriter(comptime T: anytype, value: T, writer: *std.Io.Writer) !void 
             }
         },
         .pointer => |info| {
+            try assertSize(info.child);
             switch (info.size) {
                 .slice => {
                     const len = std.math.cast(u32, value.len) orelse @panic("slice too long");
@@ -60,19 +61,21 @@ pub fn deserialize(comptime T: anytype, buf: []const u8, opts: DeserializeOption
             }
         },
         .pointer => |info| {
+            try assertSize(info.child);
             switch (info.size) {
                 .slice => {
                     if (buf.len < @sizeOf(u32)) return error.Eof;
                     value.len = try deserialize(u32, buf[0..], opts);
                     offset += @sizeOf(u32);
                     if (buf.len < offset + value.len * @sizeOf(info.child)) return error.Eof;
-                    value.ptr = @as([*]info.child, @ptrCast(@constCast(buf[offset..].ptr)));
+                    value.ptr = @as([*]info.child, @alignCast(@ptrCast(@constCast(buf[offset..].ptr))));
                     if (opts.offset) |off| off.* += value.len * @sizeOf(info.child);
                 },
                 else => @panic(std.fmt.comptimePrint("cannot deserialize {}", .{info})),
             }
         },
         .array => |info| {
+            try assertSize(info.child);
             if (buf.len < offset + value.len * @sizeOf(info.child)) return error.Eof;
             @memcpy(std.mem.asBytes(value[0..]), buf[offset..]);
             if (opts.offset) |off| off.* += value.len * @sizeOf(info.child);
@@ -80,6 +83,27 @@ pub fn deserialize(comptime T: anytype, buf: []const u8, opts: DeserializeOption
         else => @panic(std.fmt.comptimePrint("cannot deserialize {}", .{T})),
     }
     return value;
+}
+
+fn assertSize(comptime T: anytype) !void {
+    const expected = @sizeOf(T);
+    switch (@typeInfo(T)) {
+        .int, .float, .bool => {},
+        .@"struct" => |info| {
+            inline for (info.fields) |field| {
+                try assertSize(field.type);
+            }
+        },
+        .pointer => |info| {
+            if (expected != @sizeOf(info.child)) {
+                return error.SizeMismatch;
+            }
+        },
+        .array => |info| {
+            try assertSize(info.child);
+        },
+        else => @panic(std.fmt.comptimePrint("unsupported {}", .{T})),
+    }
 }
 
 test "serialize" {
