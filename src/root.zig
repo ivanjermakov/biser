@@ -66,13 +66,14 @@ pub fn deserialize(comptime T: anytype, buf: []const u8, opts: DeserializeOption
         },
         .@"struct" => |info| {
             inline for (info.fields) |field_info| {
-                switch (@typeInfo(field_info.type)) {
-                    .@"struct" => if (@hasDecl(T, "biser_ignore")) continue,
+                const F = field_info.type;
+                switch (@typeInfo(F)) {
+                    .@"struct" => if (@hasDecl(F, "biser_ignore")) continue,
                     else => {},
                 }
-                const field = try deserialize(field_info.type, buf[offset..], opts);
+                const field = try deserialize(F, buf[offset..], opts);
                 @field(value, field_info.name) = field;
-                offset += @sizeOf(field_info.type);
+                offset += @sizeOf(F);
             }
         },
         .pointer => |info| {
@@ -180,6 +181,17 @@ test "deserialize with Ignore" {
     const buf = &.{1};
     var offset: usize = 0;
     const actual = try deserialize(D, buf, .{ .offset = &offset });
+    try std.testing.expectEqualDeep(expected.a, actual.a);
+    try std.testing.expectEqual(buf.len, offset);
+}
+
+test "deserialize with Ignore unsupported" {
+    const E = struct { a: Ignore(void) };
+
+    const expected = E{ .a = .{ .v = {} } };
+    const buf = &.{};
+    var offset: usize = 0;
+    const actual = try deserialize(E, buf, .{ .offset = &offset });
     try std.testing.expectEqualDeep(expected.a, actual.a);
     try std.testing.expectEqual(buf.len, offset);
 }
